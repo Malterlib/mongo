@@ -158,6 +158,19 @@ add_option('ssl-provider',
     type='choice',
 )
 
+add_option('ssl-static',
+    help='Enable static linking with OpenSSL',
+    nargs=0
+)
+
+add_option('ssl-include-dir',
+    help='Specify include path for OpenSSL',
+)
+
+add_option('ssl-lib-dir',
+    help='Specify lib path for OpenSSL',
+)
+
 add_option('mmapv1',
     choices=['auto', 'on', 'off'],
     const='on',
@@ -3002,6 +3015,11 @@ def doConfigure(myenv):
 
     libdeps.setup_conftests(conf)
 
+    if posix_system:
+        conf.env.SetConfigHeaderDefine("MONGO_CONFIG_HAVE_HEADER_UNISTD_H")
+        conf.CheckLib('rt')
+        conf.CheckLib('dl')
+
     ### --ssl and --ssl-provider checks
     def checkOpenSSL(conf):
         sslLibName = "ssl"
@@ -3052,14 +3070,26 @@ def doConfigure(myenv):
                     except:
                         pass
 
-        if not conf.CheckLibWithHeader(
-                cryptoLibName,
-                ["openssl/crypto.h"],
-                "C",
-                "SSLeay_version(0);",
-                autoadd=True):
-            maybeIssueDarwinSSLAdvice(conf.env)
-            conf.env.ConfError("Couldn't find OpenSSL crypto.h header and library")
+        if has_option( "ssl-static" ):
+            includeDir = get_option('ssl-include-dir').rstrip('/')
+            libDir = get_option('ssl-lib-dir').rstrip('/')
+            conf.env.AppendUnique(CPPPATH=[
+                includeDir
+            ])
+            sslLib = File(libDir + "/" + env['LIBPREFIX'] + sslLibName + env['LIBSUFFIX'])
+            cryptoLib = File(libDir + "/" + env['LIBPREFIX'] + cryptoLibName + env['LIBSUFFIX'])
+            conf.env.AppendUnique(LIBS=[
+                sslLib, cryptoLib
+            ])
+        else:
+            if not conf.CheckLibWithHeader(
+                    cryptoLibName,
+                    ["openssl/crypto.h"],
+                    "C",
+                    "SSLeay_version(0);",
+                    autoadd=True):
+                maybeIssueDarwinSSLAdvice(conf.env)
+                conf.env.ConfError("Couldn't find OpenSSL crypto.h header and library")
 
         def CheckLibSSL(context):
             res = SCons.Conftest.CheckLib(context,
@@ -3320,11 +3350,6 @@ def doConfigure(myenv):
                     boostlib,
                     [boostlib + suffix for suffix in boostSuffixList],
                     language='C++')
-    if posix_system:
-        conf.env.SetConfigHeaderDefine("MONGO_CONFIG_HAVE_HEADER_UNISTD_H")
-        conf.CheckLib('rt')
-        conf.CheckLib('dl')
-
     if posix_monotonic_clock:
         conf.env.SetConfigHeaderDefine("MONGO_CONFIG_HAVE_POSIX_MONOTONIC_CLOCK")
 
