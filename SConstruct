@@ -163,6 +163,11 @@ add_option('ssl-static',
     nargs=0
 )
 
+add_option('ssl-boringssl',
+    help='Link to BoringSSL libraries',
+    nargs=0
+)
+
 add_option('ssl-include-dir',
     help='Specify include path for OpenSSL',
 )
@@ -3072,15 +3077,24 @@ def doConfigure(myenv):
 
         if has_option( "ssl-static" ):
             includeDir = get_option('ssl-include-dir').rstrip('/')
-            libDir = get_option('ssl-lib-dir').rstrip('/')
             conf.env.AppendUnique(CPPPATH=[
                 includeDir
             ])
-            sslLib = File(libDir + "/" + env['LIBPREFIX'] + sslLibName + env['LIBSUFFIX'])
-            cryptoLib = File(libDir + "/" + env['LIBPREFIX'] + cryptoLibName + env['LIBSUFFIX'])
-            conf.env.AppendUnique(LIBS=[
-                sslLib, cryptoLib
-            ])
+
+            libDir = get_option('ssl-lib-dir').rstrip('/')
+            if (libDir):
+                if has_option( "ssl-boringssl" ):
+                    conf.env.AppendUnique(LIBS=[
+                        File(libDir + "/" + env['LIBPREFIX'] + "decrepit" + env['LIBSUFFIX']),
+                        File(libDir + "/" + env['LIBPREFIX'] + "ssl" + env['LIBSUFFIX']),
+                        File(libDir + "/" + env['LIBPREFIX'] + "crypto" + env['LIBSUFFIX'])
+                    ])
+                else:
+                    sslLib = File(libDir + "/" + env['LIBPREFIX'] + sslLibName + env['LIBSUFFIX'])
+                    cryptoLib = File(libDir + "/" + env['LIBPREFIX'] + cryptoLibName + env['LIBSUFFIX'])
+                    conf.env.AppendUnique(LIBS=[
+                        sslLib, cryptoLib
+                    ])
         else:
             if not conf.CheckLibWithHeader(
                     cryptoLibName,

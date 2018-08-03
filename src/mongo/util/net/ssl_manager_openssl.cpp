@@ -135,6 +135,132 @@ bool isUnixDomainSocket(const std::string& hostname) {
     return end(hostname) != std::find(begin(hostname), end(hostname), '/');
 }
 
+Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface::ConnectionDirection direction) {
+    int curveName = 0;
+
+    auto privateKey = SSL_CTX_get0_privatekey(context);
+    if (privateKey) {
+        if (auto keyRSA = EVP_PKEY_get1_RSA(privateKey)) {
+            auto RSASize = RSA_size(keyRSA) * 8;
+            RSA_free(keyRSA);
+            // Match curve security to security of RSA key
+            if (RSASize >= 12288)
+                curveName = NID_secp521r1;
+            else if (RSASize >= 4096)
+                curveName = NID_secp384r1;
+            else
+                curveName = NID_X9_62_prime256v1;
+        } else if (auto keyEC = EVP_PKEY_get1_EC_KEY(privateKey)) {
+            curveName = EC_GROUP_get_curve_name(EC_KEY_get0_group(keyEC));
+            if (!curveName)
+                curveName = NID_secp521r1;
+            EC_KEY_free(keyEC);
+        }
+    }
+
+    if (direction == SSLManagerInterface::ConnectionDirection::kIncoming) {
+        if (curveName) {
+            EC_KEY *curveKey = EC_KEY_new_by_curve_name(curveName);
+            if (curveKey) {
+                SSL_CTX_set_options(context, SSL_OP_SINGLE_ECDH_USE);
+                if (SSL_CTX_set_tmp_ecdh(context, curveKey) != 1)
+                    SSL_CTX_set_ecdh_auto(context, 1);
+                EC_KEY_free(curveKey);     
+            } else
+                SSL_CTX_set_ecdh_auto(context, 1);
+        }
+    }
+
+    static const int supportedCurves[] = {
+        NID_secp521r1
+        , NID_secp384r1
+#ifdef OPENSSL_IS_BORINGSSL
+        , NID_X25519
+#endif
+        , NID_X9_62_prime256v1
+    };
+    
+    if (!SSL_CTX_set1_curves(context, supportedCurves, sizeof(supportedCurves) 
+        / sizeof(supportedCurves[0]))) {
+        return Status(ErrorCodes::InvalidSSLConfiguration,
+                      str::stream() << "Failed to set supported curves on ssl context: "
+                                    << SSLManagerInterface::getSSLErrorMessage(ERR_get_error()));
+    }
+
+#ifdef OPENSSL_IS_BORINGSSL
+    static const uint16_t s_DefaultAlgos[] = {
+        SSL_SIGN_ECDSA_SECP521R1_SHA512
+        , SSL_SIGN_RSA_PSS_SHA512
+        , SSL_SIGN_RSA_PKCS1_SHA512
+        , SSL_SIGN_ECDSA_SECP384R1_SHA384
+        , SSL_SIGN_RSA_PSS_SHA384
+        , SSL_SIGN_RSA_PKCS1_SHA384
+        , SSL_SIGN_ECDSA_SECP256R1_SHA256
+        , SSL_SIGN_RSA_PSS_SHA256
+        , SSL_SIGN_RSA_PKCS1_SHA256
+    };
+
+    size_t num_algos = sizeof(s_DefaultAlgos) / sizeof(s_DefaultAlgos[0]);
+    const uint16_t *algos = s_DefaultAlgos; 
+
+    switch (curveName)
+    {
+    case NID_secp521r1: break;
+    case NID_secp384r1:
+        {
+            static const uint16_t s_CustomAlgos[] = 
+            {
+                SSL_SIGN_ECDSA_SECP384R1_SHA384
+                , SSL_SIGN_RSA_PSS_SHA384
+                , SSL_SIGN_RSA_PKCS1_SHA384
+                , SSL_SIGN_ECDSA_SECP521R1_SHA512
+                , SSL_SIGN_RSA_PSS_SHA512
+                , SSL_SIGN_RSA_PKCS1_SHA512
+                , SSL_SIGN_ECDSA_SECP256R1_SHA256
+                , SSL_SIGN_RSA_PSS_SHA256
+                , SSL_SIGN_RSA_PKCS1_SHA256
+            };
+            num_algos = sizeof(s_CustomAlgos) / sizeof(s_CustomAlgos[0]);
+            algos = s_CustomAlgos; 
+        }
+        break;
+    case NID_X9_62_prime256v1:
+    case NID_X25519:
+        {
+            static const uint16_t s_CustomAlgos[] = 
+            {
+                SSL_SIGN_ECDSA_SECP256R1_SHA256
+                , SSL_SIGN_RSA_PSS_SHA256
+                , SSL_SIGN_RSA_PKCS1_SHA256
+                , SSL_SIGN_ECDSA_SECP384R1_SHA384
+                , SSL_SIGN_RSA_PSS_SHA384
+                , SSL_SIGN_RSA_PKCS1_SHA384
+                , SSL_SIGN_ECDSA_SECP521R1_SHA512
+                , SSL_SIGN_RSA_PSS_SHA512
+                , SSL_SIGN_RSA_PKCS1_SHA512
+            };
+            num_algos = sizeof(s_CustomAlgos) / sizeof(s_CustomAlgos[0]);
+            algos = s_CustomAlgos; 
+        }
+        break;
+    }
+
+    if (!SSL_CTX_set_signing_algorithm_prefs(context, algos, num_algos)) {
+        return Status(ErrorCodes::InvalidSSLConfiguration,
+                      str::stream() << "Failed to set preferred signing algorithms on ssl context: "
+                                    << SSLManagerInterface::getSSLErrorMessage(ERR_get_error()));
+    }
+
+    if (!SSL_CTX_set_verify_algorithm_prefs(context, algos, num_algos)) {
+        return Status(ErrorCodes::InvalidSSLConfiguration,
+                      str::stream() << "Failed to set preferred verify algorithms on ssl context: "
+                                    << SSLManagerInterface::getSSLErrorMessage(ERR_get_error()));
+    }
+#endif
+
+    return Status::OK();
+}
+
 using UniqueBIO = std::unique_ptr<BIO, OpenSSLDeleter<decltype(::BIO_free), ::BIO_free>>;
 
 #ifdef MONGO_CONFIG_HAVE_SSL_EC_KEY_NEW
@@ -987,48 +1113,10 @@ Status SSLManagerOpenSSL::initSSLContext(SSL_CTX* context,
         }
     }
 
-    std::string cafile = params.sslCAFile;
-    if (direction == ConnectionDirection::kIncoming && !params.sslClusterCAFile.empty()) {
-        cafile = params.sslClusterCAFile;
-    }
-    const auto status = cafile.empty() ? _setupSystemCA(context) : _setupCA(context, cafile);
-    if (!status.isOK()) {
+    const auto status =
+        params.sslCAFile.empty() ? _setupSystemCA(context) : _setupCA(context, params.sslCAFile);
+    if (!status.isOK())
         return status;
-    }
-
-    if (direction == ConnectionDirection::kIncoming) {
-        auto privateKey = SSL_CTX_get0_privatekey(context);
-        if (!privateKey)
-            return Status(ErrorCodes::InvalidSSLConfiguration, 
-                          "Can not set up perfect forward secrecy (no private key).");
-        int curveName = 0;
-        if (auto keyRSA = EVP_PKEY_get1_RSA(privateKey)) {
-            auto RSASize = RSA_size(keyRSA) * 8;
-            RSA_free(keyRSA);
-            // Match curve security to security of RSA key
-            if (RSASize >= 12288)
-                curveName = NID_secp521r1;
-            else if (RSASize >= 4096)
-                curveName = NID_secp384r1;
-            else
-                curveName = NID_X9_62_prime256v1;
-        } else if (auto keyEC = EVP_PKEY_get1_EC_KEY(privateKey)) {
-            curveName = EC_GROUP_get_curve_name(EC_KEY_get0_group(keyEC));
-            if (!curveName)
-                curveName = NID_secp521r1;
-            EC_KEY_free(keyEC);
-        }
-        if (curveName) {
-            EC_KEY *curveKey = EC_KEY_new_by_curve_name(curveName);
-            if (curveKey) {
-                SSL_CTX_set_options(context, SSL_OP_SINGLE_ECDH_USE);
-                if (SSL_CTX_set_tmp_ecdh(context, curveKey) != 1)
-                    SSL_CTX_set_ecdh_auto(context, 1);
-                EC_KEY_free(curveKey);     
-            } else
-                SSL_CTX_set_ecdh_auto(context, 1);
-        }
-    }
 
     if (!params.sslCRLFile.empty()) {
         if (!_setupCRL(context, params.sslCRLFile)) {
@@ -1082,6 +1170,10 @@ Status SSLManagerOpenSSL::initSSLContext(SSL_CTX* context,
             }
         }
     }
+
+    const auto deducedStatus = deduceSettingsFromCertificate(context, direction);
+    if (!deducedStatus.isOK())
+      return deducedStatus;
 
     return Status::OK();
 }
@@ -1807,7 +1899,7 @@ StatusWith<stdx::unordered_set<RoleName>> SSLManagerOpenSSL::_parsePeerRoles(X50
         extCount = sk_X509_EXTENSION_num(exts);
     }
 
-    ASN1_OBJECT* rolesObj = OBJ_nid2obj(_rolesNid);
+    const ASN1_OBJECT* rolesObj = OBJ_nid2obj(_rolesNid);
 
     // Search all certificate extensions for our own
     stdx::unordered_set<RoleName> roles;
