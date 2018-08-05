@@ -3110,7 +3110,7 @@ def doConfigure(myenv):
                      libs=[sslLibName],
                      extra_libs=sslLinkDependencies,
                      header='#include "openssl/ssl.h"',
-                     language="C",
+                     language="C++",
                      call="SSL_version(NULL);",
                      autoadd=True)
             context.did_show_result = 1
@@ -3140,7 +3140,7 @@ def doConfigure(myenv):
             }
             """
             context.Message("Checking that linking to OpenSSL works...")
-            ret = context.TryLink(textwrap.dedent(test_body), ".c")
+            ret = context.TryLink(textwrap.dedent(test_body), ".cpp")
             context.Result(ret)
             return ret
 
