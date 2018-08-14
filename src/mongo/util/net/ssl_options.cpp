@@ -454,8 +454,10 @@ Status storeSSLServerOptions(const moe::Environment& params) {
          * old version of OpenSSL (pre 1.0.0l)
          * which does not support TLS 1.1 or later.
          */
-        log() << "Automatically disabling TLS 1.0, to force-enable TLS 1.0 "
-                 "specify --sslDisabledProtocols 'none'";
+        if (sslGlobalParams.sslMode.load() != SSLParams::SSLMode_disabled) {
+            log() << "Automatically disabling TLS 1.0, to force-enable TLS 1.0 "
+                     "specify --sslDisabledProtocols 'none'";
+        }
         sslGlobalParams.sslDisabledProtocols.push_back(SSLParams::Protocols::TLS1_0);
 #endif
     }
