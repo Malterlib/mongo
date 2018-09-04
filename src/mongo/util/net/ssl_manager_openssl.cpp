@@ -1386,9 +1386,9 @@ void recordTLSVersion(const SSL* conn) {
             counts.tls12.addAndFetch(1);
             break;
 #ifdef TLS1_3_VERSION
-        case TLS1_3_VERSION:
-            counts.tls13.addAndFetch(1);
-            break;
+        //case TLS1_3_VERSION:
+        //    counts.tls13.addAndFetch(1);
+        //    break;
 #endif
         default:
             // Do nothing
