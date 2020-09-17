@@ -165,7 +165,7 @@ Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface
                 SSL_CTX_set_options(context, SSL_OP_SINGLE_ECDH_USE);
                 if (SSL_CTX_set_tmp_ecdh(context, curveKey) != 1)
                     SSL_CTX_set_ecdh_auto(context, 1);
-                EC_KEY_free(curveKey);     
+                EC_KEY_free(curveKey);
             } else
                 SSL_CTX_set_ecdh_auto(context, 1);
         }
@@ -179,8 +179,8 @@ Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface
 #endif
         , NID_X9_62_prime256v1
     };
-    
-    if (!SSL_CTX_set1_curves(context, supportedCurves, sizeof(supportedCurves) 
+
+    if (!SSL_CTX_set1_curves(context, supportedCurves, sizeof(supportedCurves)
         / sizeof(supportedCurves[0]))) {
         return Status(ErrorCodes::InvalidSSLConfiguration,
                       str::stream() << "Failed to set supported curves on ssl context: "
@@ -201,14 +201,14 @@ Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface
     };
 
     size_t num_algos = sizeof(s_DefaultAlgos) / sizeof(s_DefaultAlgos[0]);
-    const uint16_t *algos = s_DefaultAlgos; 
+    const uint16_t *algos = s_DefaultAlgos;
 
     switch (curveName)
     {
     case NID_secp521r1: break;
     case NID_secp384r1:
         {
-            static const uint16_t s_CustomAlgos[] = 
+            static const uint16_t s_CustomAlgos[] =
             {
                 SSL_SIGN_ECDSA_SECP384R1_SHA384
                 , SSL_SIGN_RSA_PSS_SHA384
@@ -221,13 +221,13 @@ Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface
                 , SSL_SIGN_RSA_PKCS1_SHA256
             };
             num_algos = sizeof(s_CustomAlgos) / sizeof(s_CustomAlgos[0]);
-            algos = s_CustomAlgos; 
+            algos = s_CustomAlgos;
         }
         break;
     case NID_X9_62_prime256v1:
     case NID_X25519:
         {
-            static const uint16_t s_CustomAlgos[] = 
+            static const uint16_t s_CustomAlgos[] =
             {
                 SSL_SIGN_ECDSA_SECP256R1_SHA256
                 , SSL_SIGN_RSA_PSS_SHA256
@@ -240,7 +240,7 @@ Status deduceSettingsFromCertificate(SSL_CTX* const context, SSLManagerInterface
                 , SSL_SIGN_RSA_PKCS1_SHA512
             };
             num_algos = sizeof(s_CustomAlgos) / sizeof(s_CustomAlgos[0]);
-            algos = s_CustomAlgos; 
+            algos = s_CustomAlgos;
         }
         break;
     }
@@ -428,7 +428,11 @@ struct VerifiedChainDeleter {
 
 using UniqueVerifiedChainPolyfill = std::unique_ptr<STACK_OF(X509), VerifiedChainDeleter>;
 UniqueVerifiedChainPolyfill SSLgetVerifiedChain(SSL* s) {
+#ifdef OPENSSL_IS_BORINGSSL
+    return UniqueVerifiedChainPolyfill(SSL_get_peer_cert_chain(s));
+#else
     return UniqueVerifiedChainPolyfill(SSL_get0_verified_chain(s));
+#endif
 }
 
 /**
@@ -636,6 +640,11 @@ private:
                 return StringData(_password->c_str());
             }
 
+#ifdef OPENSSL_IS_BORINGSSL
+            StringBuilder error;
+            error << "BoringSSL does not support getting password from user";
+            return Status(ErrorCodes::UnknownError, error.str());
+#else
             std::array<char, 1025> pwBuf;
             int ret = EVP_read_pw_string(pwBuf.data(), pwBuf.size() - 1, _prompt.c_str(), 0);
             pwBuf.at(pwBuf.size() - 1) = '\0';
@@ -653,6 +662,7 @@ private:
 
             _password = SecureString(pwBuf.data());
             return StringData(_password->c_str());
+#endif
         }
 
     private:
