@@ -57,7 +57,9 @@
 #include "mongo/util/fail_point.h"
 #include "mongo/util/net/cidr.h"
 #include "mongo/util/net/dh_openssl.h"
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 #include "mongo/util/net/ocsp/ocsp_manager.h"
+#endif
 #include "mongo/util/net/private/ssl_expiration.h"
 #include "mongo/util/net/socket_exception.h"
 #include "mongo/util/net/ssl_options.h"
@@ -77,7 +79,9 @@
 #include <openssl/dh.h>
 #include <openssl/evp.h>
 #include <openssl/obj_mac.h>
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 #include <openssl/ocsp.h>
+#endif
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
@@ -386,10 +390,11 @@ IMPLEMENT_ASN1_ENCODE_FUNCTIONS_const_fname(ASN1_SEQUENCE_ANY, ASN1_SET_ANY, ASN
 // clang-format on
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || \
-    (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
+    (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL) || defined(OPENSSL_IS_BORINGSSL)
 // Copies of OpenSSL after 1.1.0 define new functions for interaction with
 // X509 and DH structures. We must polyfill used definitions to interact with older OpenSSL
 // versions.
+#ifndef OPENSSL_IS_BORINGSSL
 const STACK_OF(X509_EXTENSION) * X509_get0_extensions(const X509* peerCert) {
     return peerCert->cert_info->extensions;
 }
@@ -397,10 +402,18 @@ const STACK_OF(X509_EXTENSION) * X509_get0_extensions(const X509* peerCert) {
 inline ASN1_TIME* X509_get0_notAfter(const X509* cert) {
     return X509_get_notAfter(cert);
 }
+#endif
 
+int
+EVP_read_pw_string(char *buf, int length, const char *prompt, int verify) {
+    return 1;
+}
+
+#ifndef OPENSSL_IS_BORINGSSL
 inline int X509_NAME_ENTRY_set(const X509_NAME_ENTRY* ne) {
     return ne->set;
 }
+#endif
 
 inline void X509_OBJECT_free(X509_OBJECT* a) {
     X509_OBJECT_free_contents(a);
@@ -410,6 +423,8 @@ inline void X509_OBJECT_free(X509_OBJECT* a) {
 void X509_STORE_CTX_set0_untrusted(X509_STORE_CTX* ctx, STACK_OF(X509) * sk) {
     X509_STORE_CTX_set_chain(ctx, sk);
 }
+
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 
 X509_OBJECT* X509_STORE_CTX_get_obj_by_subject(X509_STORE_CTX* vs, int type, X509_NAME* name) {
     X509_OBJECT* ret;
@@ -432,6 +447,7 @@ X509* X509_OBJECT_get0_X509(const X509_OBJECT* a) {
 
     return a->data.x509;
 }
+#endif
 
 using UniqueVerifiedChainPolyfill = std::unique_ptr<STACK_OF(X509), X509StackDeleter>;
 
@@ -452,9 +468,11 @@ STACK_OF(X509) * SSL_get0_verified_chain(SSL* s) {
     return X509_STORE_CTX_get1_chain(ctx.get());
 }
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 const OCSP_CERTID* OCSP_SINGLERESP_get0_id(const OCSP_SINGLERESP* single) {
     return single->certId;
 }
+#endif
 
 #if OPENSSL_VERSION_NUMBER < 0x10002000L
 inline bool ASN1_TIME_diff(int*, int*, const ASN1_TIME*, const ASN1_TIME*) {
@@ -462,6 +480,7 @@ inline bool ASN1_TIME_diff(int*, int*, const ASN1_TIME*, const ASN1_TIME*) {
 }
 #endif
 
+#ifndef OPENSSL_IS_BORINGSSL
 int DH_set0_pqg(DH* dh, BIGNUM* p, BIGNUM* q, BIGNUM* g) {
     dh->p = p;
     dh->g = g;
@@ -478,6 +497,7 @@ void DH_get0_pqg(const DH* dh, const BIGNUM** p, const BIGNUM** q, const BIGNUM*
         *g = dh->g;
     }
 }
+#endif
 
 // TLS versions before 1.1.0 did not define the TLS Feature extension
 static ASN1OID tlsFeatureOID("1.3.6.1.5.5.7.1.24", "tlsfeature", "TLS Feature");
@@ -562,12 +582,15 @@ using UniqueOpenSSLStringStack =
     std::unique_ptr<STACK_OF(OPENSSL_STRING),
                     OpenSSLDeleter<decltype(X509_email_free), ::X509_email_free>>;
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 using UniqueOCSPResponse =
     std::unique_ptr<OCSP_RESPONSE,
                     OpenSSLDeleter<decltype(OCSP_RESPONSE_free), ::OCSP_RESPONSE_free>>;
 
 using UniqueCertId =
     std::unique_ptr<OCSP_CERTID, OpenSSLDeleter<decltype(OCSP_CERTID_free), ::OCSP_CERTID_free>>;
+
+#endif
 
 Status getSSLFailure(ErrorCodes::Error code, StringData errorMsg) {
     return Status(code,
@@ -588,6 +611,8 @@ struct X509_OBJECTFree {
         }
     }
 };
+
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 
 using UniqueX509Object = std::unique_ptr<X509_OBJECT, X509_OBJECTFree>;
 
@@ -1282,6 +1307,7 @@ private:
     PeriodicRunner::JobAnchor _ocspStaplingAnchor;
     bool _shutdown{false};
 };
+#endif
 
 class SSLManagerOpenSSL : public SSLManagerInterface,
                           public std::enable_shared_from_this<SSLManagerOpenSSL> {
@@ -1299,9 +1325,11 @@ public:
                           const SSLParams& params,
                           ConnectionDirection direction) final;
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     std::shared_ptr<X509_STORE> getOCSPCertStore() {
         return _ocspCertStore;
     }
+#endif
 
     SSLConnectionInterface* connect(Socket* socket) final;
 
@@ -1316,7 +1344,6 @@ public:
                                                         const std::string& remoteHost,
                                                         const HostAndPort& hostForLogging,
                                                         const ExecutorPtr& reactor) final;
-
     /**
      * Sets the OCSP Response to be stapled to the TLS Connection. Sets the _ocspStaplingAnchor
      * object in the class.
@@ -1335,6 +1362,7 @@ public:
 
     int SSL_shutdown(SSLConnectionInterface* conn) final;
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     Future<void> ocspClientVerification(SSL* ssl, const ExecutorPtr& reactor);
 
     const std::shared_ptr<OCSPStaplingContext> getOcspStaplingContext() {
@@ -1343,6 +1371,7 @@ public:
     }
 
     Milliseconds updateOcspStaplingContextWithResponse(StatusWith<OCSPFetchResponse> swResponse);
+#endif
 
 private:
     const int _rolesNid = OBJ_create(mongodbRolesOID.identifier.c_str(),
@@ -1350,7 +1379,9 @@ private:
                                      mongodbRolesOID.longDescription.c_str());
     UniqueSSLContext _serverContext;             // SSL context for incoming connections
     UniqueSSLContext _clientContext;             // SSL context for outgoing connections
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     std::shared_ptr<X509_STORE> _ocspCertStore;  // X509 Store specifically for OCSP stapling
+#endif
 
     bool _weakValidation;
     bool _allowInvalidCertificates;
@@ -1358,10 +1389,12 @@ private:
     bool _suppressNoCertificateWarning;
     SSLConfiguration _sslConfiguration;
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     Mutex _sharedResponseMutex = MONGO_MAKE_LATCH("OCSPStaplingJobRunner::_sharedResponseMutex");
     std::shared_ptr<OCSPStaplingContext> _ocspStaplingContext;
 
     OCSPFetcher _fetcher;
+#endif
 
     /** Password caching helper class.
      * Objects of this type will remember the config provided password they had access to at
@@ -1663,12 +1696,16 @@ SSLConnectionOpenSSL::~SSLConnectionOpenSSL() {
 SSLManagerOpenSSL::SSLManagerOpenSSL(const SSLParams& params, bool isServer)
     : _serverContext(nullptr),
       _clientContext(nullptr),
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
       _ocspCertStore(nullptr),
+#endif
       _weakValidation(params.sslWeakCertificateValidation),
       _allowInvalidCertificates(params.sslAllowInvalidCertificates),
       _allowInvalidHostnames(params.sslAllowInvalidHostnames),
       _suppressNoCertificateWarning(params.suppressNoTLSPeerCertificateWarning),
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
       _fetcher(this),
+#endif
       _serverPEMPassword(params.sslPEMKeyPassword, "Enter PEM passphrase"),
       _clusterPEMPassword(params.sslClusterPassword, "Enter cluster certificate passphrase") {
     if (!_initSynchronousSSLContext(&_clientContext, params, ConnectionDirection::kOutgoing)) {
@@ -1715,6 +1752,7 @@ SSLManagerOpenSSL::SSLManagerOpenSSL(const SSLParams& params, bool isServer)
         static CertificateExpirationMonitor task =
             CertificateExpirationMonitor(_sslConfiguration.serverCertificateExpirationDate);
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
         if (tlsOCSPEnabled) {
             OpenSSLDeleter<decltype(::X509_STORE_free), ::X509_STORE_free> deleter;
             _ocspCertStore = std::shared_ptr<X509_STORE>(X509_STORE_new(), deleter);
@@ -1732,6 +1770,7 @@ SSLManagerOpenSSL::SSLManagerOpenSSL(const SSLParams& params, bool isServer)
                 uasserted(5771601, "failed to load certificates into OCSP X509 store");
             }
         }
+#endif
     }
 }
 
@@ -1804,6 +1843,7 @@ int SSLManagerOpenSSL::SSL_shutdown(SSLConnectionInterface* connInterface) {
     return status;
 }
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 int ocspServerCallback(SSL* ssl, void* arg) {
     std::shared_ptr<OCSPStaplingContext> context =
         static_cast<SSLManagerOpenSSL*>(arg)->getOcspStaplingContext();
@@ -2049,6 +2089,8 @@ Future<void> SSLManagerOpenSSL::ocspClientVerification(SSL* ssl, const ExecutorP
     return convert(std::move(semifuture)).onCompletion(validate).then(refetchIfInvalidAndReturn);
 }
 
+#endif
+
 using StoreCtxVerifiedChain = std::unique_ptr<STACK_OF(X509), X509StackDeleter>;
 
 /** getCertificateForContext provides access to the X509* used by the provided SSL_CTX*.
@@ -2088,6 +2130,7 @@ Status SSLManagerOpenSSL::stapleOCSPResponse(SSL_CTX* context) {
 }
 #endif  // MONGO_CONFIG_OCSP_STAPLING_ENABLED
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 Status OCSPFetcher::start(SSL_CTX* context, bool asyncOCSPStaple) {
     // Increment the ref count on SSL_CTX by creating a SSL object so that our context lives with
     // the OCSPFetcher
@@ -2189,6 +2232,7 @@ void OCSPFetcher::doPeriodicJob() {
             this->_ocspStaplingAnchor.setPeriod(getPeriodForStapleJob(swDuration));
         });
 }
+
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
 void sslContextGetOtherCerts(SSL_CTX* ctx, STACK_OF(X509) * *sk) {
     SSL_CTX_get_extra_chain_certs(ctx, sk);
@@ -2272,10 +2316,15 @@ void OCSPFetcher::shutdown() {
     }
 }
 
+#endif
+
 void SSLManagerOpenSSL::stopJobs() {
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     _fetcher.shutdown();
+#endif
 }
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
 Milliseconds SSLManagerOpenSSL::updateOcspStaplingContextWithResponse(
     StatusWith<OCSPFetchResponse> swResponse) {
     stdx::lock_guard<mongo::Mutex> guard(_sharedResponseMutex);
@@ -2300,7 +2349,7 @@ Milliseconds SSLManagerOpenSSL::updateOcspStaplingContextWithResponse(
 
     return swResponse.getValue().fetchNewResponseDuration();
 }
-
+#endif
 
 Status SSLManagerOpenSSL::initSSLContext(SSL_CTX* context,
                                          const SSLParams& params,
@@ -2440,6 +2489,7 @@ Status SSLManagerOpenSSL::initSSLContext(SSL_CTX* context,
         }
     }
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     if (tlsOCSPEnabled) {
         if (direction == SSLManagerInterface::ConnectionDirection::kOutgoing) {
             // This should only induce an extra network call if there is no stapled response
@@ -2448,6 +2498,7 @@ Status SSLManagerOpenSSL::initSSLContext(SSL_CTX* context,
             SSL_CTX_set_tlsext_status_arg(context, nullptr);
         }
     }
+#endif
 
     if (!params.sslPEMTempDHParam.empty()) {
         try {
@@ -2996,12 +3047,14 @@ Future<SSLPeerInfo> SSLManagerOpenSSL::parseAndValidatePeerCertificate(
 
     Future<void> ocspFuture;
 
+#ifdef MONGO_CONFIG_OCSP_STAPLING_ENABLED
     // The check to ensure that remoteHost is empty is to ensure that we only run OCSP
     // verification when we are a client, never as a server.
     if (tlsOCSPEnabled && !remoteHost.empty() && !_allowInvalidCertificates) {
 
         ocspFuture = ocspClientVerification(conn, reactor);
     }
+#endif
 
     // TODO: check optional cipher restriction, using cert.
     auto peerSubject = getCertificateSubjectX509Name(peerCert);
