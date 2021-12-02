@@ -4320,20 +4320,20 @@ def doConfigure(myenv):
     #
     # MONGO_CRYPTO is always enabled regardless of --ssl=on/off
     # However, ssl_provider will be rewritten to 'none' if --ssl=off
-    if conf.env.TargetOSIs('windows'):
-        # SChannel on Windows
-        ssl_provider = 'windows'
-        conf.env.SetConfigHeaderDefine("MONGO_CONFIG_SSL_PROVIDER", "MONGO_CONFIG_SSL_PROVIDER_WINDOWS")
-        conf.env.Append( MONGO_CRYPTO=["windows"] )
+    #if conf.env.TargetOSIs('windows'):
+    #    # SChannel on Windows
+    #    ssl_provider = 'windows'
+    #    conf.env.SetConfigHeaderDefine("MONGO_CONFIG_SSL_PROVIDER", "MONGO_CONFIG_SSL_PROVIDER_WINDOWS")
+    #    conf.env.Append( MONGO_CRYPTO=["windows"] )
 
-    elif conf.env.TargetOSIs('darwin', 'macOS'):
-        # SecureTransport on macOS
-        ssl_provider = 'apple'
-        conf.env.SetConfigHeaderDefine("MONGO_CONFIG_SSL_PROVIDER", "MONGO_CONFIG_SSL_PROVIDER_APPLE")
-        conf.env.Append( MONGO_CRYPTO=["apple"] )
-        conf.env.AppendUnique(FRAMEWORKS=['CoreFoundation', 'Security'])
+    #elif conf.env.TargetOSIs('darwin', 'macOS'):
+    #    # SecureTransport on macOS
+    #    ssl_provider = 'apple'
+    #    conf.env.SetConfigHeaderDefine("MONGO_CONFIG_SSL_PROVIDER", "MONGO_CONFIG_SSL_PROVIDER_APPLE")
+    #    conf.env.Append( MONGO_CRYPTO=["apple"] )
+    #    conf.env.AppendUnique(FRAMEWORKS=['CoreFoundation', 'Security'])
 
-    elif require_ssl:
+    if require_ssl:
         checkOpenSSL(conf)
         # Working OpenSSL available, use it.
         conf.env.SetConfigHeaderDefine("MONGO_CONFIG_SSL_PROVIDER", "MONGO_CONFIG_SSL_PROVIDER_OPENSSL")
