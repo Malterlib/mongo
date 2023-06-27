@@ -4430,6 +4430,7 @@ def doConfigure(myenv):
             "BOOST_LOG_NO_SHORTHAND_NAMES",
             "BOOST_LOG_USE_NATIVE_SYSLOG",
             "BOOST_LOG_WITHOUT_THREAD_ATTR",
+            "BOOST_NO_CXX98_FUNCTION_BASE",
             "ABSL_FORCE_ALIGNED_ACCESS",
         ]
     )
