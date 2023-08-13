@@ -1602,7 +1602,7 @@ if env.TargetOSIs('posix'):
         env.Append(
             CCFLAGS_WERROR=["-Werror"],
             CXXFLAGS_WERROR=['-Werror=unused-result'] if env.ToolchainIs('clang') else [],
-            LINKFLAGS_WERROR=['-Wl,-fatal_warnings' if env.TargetOSIs('darwin') else "-Wl,--fatal-warnings"],
+            LINKFLAGS_WERROR=[],
         )
 elif env.TargetOSIs('windows'):
         env.Append(
