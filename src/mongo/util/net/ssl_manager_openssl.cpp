@@ -427,11 +427,6 @@ inline int X509_NAME_ENTRY_set(const X509_NAME_ENTRY* ne) {
 }
 #endif
 
-inline void X509_OBJECT_free(X509_OBJECT* a) {
-    X509_OBJECT_free_contents(a);
-    OPENSSL_free(a);
-}
-
 void X509_STORE_CTX_set0_untrusted(X509_STORE_CTX* ctx, STACK_OF(X509) * sk) {
     X509_STORE_CTX_set_chain(ctx, sk);
 }
