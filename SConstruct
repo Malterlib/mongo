@@ -3088,6 +3088,11 @@ def doConfigure(myenv):
 
 
     if myenv.ToolchainIs('clang', 'gcc'):
+        myenv.AddToCCFLAGSIfSupported('-Wno-enum-constexpr-conversion')
+        myenv.AddToCCFLAGSIfSupported('-Wno-deprecated-builtins')
+        myenv.AddToCCFLAGSIfSupported('-Wno-unqualified-std-cast-call')
+        myenv.AddToCCFLAGSIfSupported('-Wno-deprecated-non-prototype')
+
         # This warning was added in g++-4.8.
         myenv.AddToCCFLAGSIfSupported('-Wno-unused-local-typedefs')
 
